@@ -80,10 +80,14 @@ def main():
     current_user = st.session_state['user_name']
     
     # --- ヘッダー ---
-    st.write(f"お疲れ様です、**{current_user}** さん！ 👋")
-    if st.button("ログアウト", size="small"):
-        del st.session_state['user_name']
-        st.rerun()
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.write(f"お疲れ様です、**{current_user}** さん！ 👋")
+    with c2:
+        # ここを修正しました
+        if st.button("ログアウト"):
+            del st.session_state['user_name']
+            st.rerun()
 
     st.divider()
 
@@ -160,9 +164,13 @@ def main():
     st.caption("みんなの足跡")
     if not df.empty:
         # 最新10件を表示
-        recent_logs = df.sort_values('日時詳細', ascending=False).head(10)
-        for _, row in recent_logs.iterrows():
-            st.text(f"{row['ユーザー名']}: {row['科目']} ({row['時間']}分) - {row['日時詳細'][5:-3]}")
+        if '日時詳細' in df.columns:
+            recent_logs = df.sort_values('日時詳細', ascending=False).head(10)
+            for _, row in recent_logs.iterrows():
+                # 日時がある場合のみ表示
+                time_str = str(row['日時詳細'])
+                display_time = time_str[5:-3] if len(time_str) > 10 else time_str
+                st.text(f"{row['ユーザー名']}: {row['科目']} ({row['時間']}分) - {display_time}")
 
 if __name__ == "__main__":
     main()
