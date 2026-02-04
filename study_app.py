@@ -1,49 +1,79 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from streamlit_gsheets import GSheetsConnection
 import time
+from supabase import create_client, Client
 
 # --- 設定 ---
 st.set_page_config(page_title="Study Battle 🔥", page_icon="👑", layout="centered")
 
-# --- 関数: データの読み込み ---
+# --- 関数: Supabaseクライアントの初期化 ---
+# リソースを節約するためキャッシュ化
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase = init_supabase()
+
+# --- 関数: データの読み込み (Supabase版) ---
 def load_data():
-    conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        df = conn.read(worksheet="Sheet1", ttl=0)
-        if df.empty:
-             return pd.DataFrame(columns=['ユーザー名', '科目', '時間', '日付', '日時詳細'])
+        # Supabaseから全データを取得
+        response = supabase.table("study_logs").select("*").execute()
+        
+        # データがない場合の処理
+        if not response.data:
+            return pd.DataFrame(columns=['ユーザー名', '科目', '時間', '日付', '日時詳細'])
+        
+        # データをDataFrameに変換
+        df = pd.DataFrame(response.data)
+        
+        # Supabaseの英語カラム名を、アプリで使う日本語名にリネーム
+        df = df.rename(columns={
+            'user_name': 'ユーザー名',
+            'subject': '科目',
+            'study_time': '時間',
+            'study_date': '日付',
+            'created_at': '日時詳細'
+        })
+        
+        # 日時詳細はUTC(世界標準時)で返ってくることが多いので、見やすく調整（簡易的）
+        # 必要に応じて pd.to_datetime で変換などを行いますが、
+        # 今回は表示用としてそのまま、あるいは文字列として扱います
+        
         return df
-    except:
+    except Exception as e:
+        # エラー時は空のデータを返す（デバッグ用にエラー表示しても良い）
+        st.error(f"データ読み込みエラー: {e}")
         return pd.DataFrame(columns=['ユーザー名', '科目', '時間', '日付', '日時詳細'])
 
-# --- 関数: データの保存 (リトライ機能付き) ---
+# --- 関数: データの保存 (Supabase版) ---
 def save_data(user, subject, minutes):
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            df = load_data()
-            now = datetime.now()
-            new_data = pd.DataFrame({
-                'ユーザー名': [user],
-                '科目': [subject],
-                '時間': [minutes],
-                '日付': [now.strftime('%Y-%m-%d')],
-                '日時詳細': [now.strftime('%Y-%m-%d %H:%M:%S')]
-            })
-            updated_df = pd.concat([df, new_data], ignore_index=True)
-            conn.update(worksheet="Sheet1", data=updated_df)
-            return 
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                st.error("通信が混み合っています。もう一度ボタンを押してください。")
-                raise e
+    try:
+        now = datetime.now()
+        
+        # データベースに挿入するデータ
+        data = {
+            "user_name": user,
+            "subject": subject,
+            "study_time": minutes,
+            "study_date": now.strftime('%Y-%m-%d'),
+            # created_atはSupabaseが自動で入れることもできますが、
+            # タイムゾーンを日本時間に合わせるため明示的に入れてもOK
+            # ここではSupabaseのデフォルト(自動)に任せるか、現在時刻を入れる
+            "created_at": now.isoformat() 
+        }
+        
+        # Insert実行 (行を追加するだけなので競合しない！)
+        supabase.table("study_logs").insert(data).execute()
+        
+    except Exception as e:
+        st.error(f"保存エラー: {e}")
+        raise e
 
-# --- UI: ログイン画面 ---
+# --- UI: ログイン画面 (変更なし) ---
 def login_screen(df):
     st.title("🎓 Study Battle Login")
     
@@ -80,12 +110,12 @@ def login_screen(df):
 
 # --- メイン処理 ---
 def main():
-    # 🚫 BANチェック: セッションにbannedフラグがある場合
+    # 🚫 BANチェック
     if st.session_state.get('banned'):
         st.error("### ⚠️ アクセス拒否")
         st.title("あなたは永久BANされました。")
         st.write("このアプリを利用することはできません。")
-        st.stop() # ここでプログラムを強制終了させて、以降のUIを出さない
+        st.stop()
 
     # データをロード
     df = load_data()
@@ -95,13 +125,12 @@ def main():
         login_screen(df)
         return
 
-    # ログイン中の名前を再チェック（念のため）
     current_user = st.session_state['user_name']
     if "こはく" in current_user:
         st.session_state['banned'] = True
         st.rerun()
 
-    # --- 以下、通常のアプリ画面 ---
+    # --- 以下、アプリ画面 ---
     c1, c2 = st.columns([3, 1])
     with c1:
         st.write(f"お疲れ様です、**{current_user}** さん！ 👋")
@@ -130,11 +159,14 @@ def main():
     st.subheader("👑 ランキング")
     
     if not df.empty:
+        # 数値型への変換を念のため行う
         df['時間'] = pd.to_numeric(df['時間'], errors='coerce').fillna(0)
+        
         tab1, tab2 = st.tabs(["📅 今日の1位", "🏆 総合ランキング"])
         today_str = datetime.now().strftime('%Y-%m-%d')
 
         with tab1:
+            # 日付フィルタリング
             today_df = df[df['日付'] == today_str]
             if not today_df.empty:
                 daily_ranking = today_df.groupby('ユーザー名')['時間'].sum().reset_index().sort_values('時間', ascending=False)
@@ -164,10 +196,13 @@ def main():
     st.divider()
     st.caption("みんなの足跡")
     if not df.empty and '日時詳細' in df.columns:
+        # 日時詳細でソート (文字列比較になるがISOフォーマットなら概ねOK)
         recent_logs = df.sort_values('日時詳細', ascending=False).head(10)
         for _, row in recent_logs.iterrows():
+            # Supabaseのタイムスタンプは "2023-10-27T10:00:00+00:00" のような形式
             time_str = str(row['日時詳細'])
-            display_time = time_str[5:-3] if len(time_str) > 10 else time_str
+            # 表示用に簡易整形 (Tをスペースに置換など)
+            display_time = time_str.replace("T", " ").split(".")[0] 
             st.text(f"{row['ユーザー名']}: {row['科目']} ({row['時間']}分) - {display_time}")
 
 if __name__ == "__main__":
