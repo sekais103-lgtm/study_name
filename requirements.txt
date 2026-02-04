@@ -1,3 +1,3 @@
-streamlit
-pandas
-st-gsheets-connection
+[supabase]
+url = "https://lumhojpevyfnuwxbydwf.supabase.co"
+key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1bWhvanBldnlmbnV3eGJ5ZHdmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwMjM5NDAsImV4cCI6MjA4NTU5OTk0MH0.WcD1qgqYmK4_htQKEr3N_m_hV_xZlls8SLod5hBiWYg"
